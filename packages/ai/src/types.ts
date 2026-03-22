@@ -138,6 +138,8 @@ export interface TextContent {
 	type: "text";
 	text: string;
 	textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
+	/** Provider-specific text annotations preserved for app-side inspection and future rendering. */
+	annotations?: Array<Record<string, unknown>>;
 }
 
 export interface ThinkingContent {
@@ -198,6 +200,8 @@ export interface AssistantMessage {
 	stopReason: StopReason;
 	errorMessage?: string;
 	timestamp: number; // Unix timestamp in milliseconds
+	/** Opaque provider-specific server-side tool items (e.g., OpenAI `web_search_call`) preserved for conversation replay. */
+	_serverToolCalls?: string[];
 }
 
 export interface ToolResultMessage<TDetails = any> {
@@ -226,6 +230,11 @@ export interface Context {
 	tools?: Tool[];
 }
 
+export type ServerToolCall = {
+	kind: "web_search";
+	callId: string;
+};
+
 /**
  * Event protocol for AssistantMessageEventStream.
  *
@@ -245,6 +254,8 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
+	| { type: "server_toolcall_start"; serverToolCall: ServerToolCall; partial: AssistantMessage }
+	| { type: "server_toolcall_end"; serverToolCall: ServerToolCall; partial: AssistantMessage }
 	| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">; message: AssistantMessage }
 	| { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
 

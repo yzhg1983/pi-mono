@@ -4,6 +4,7 @@ import type {
 	ResponseCreateParamsStreaming,
 	ResponseFunctionCallOutputItemList,
 	ResponseFunctionToolCall,
+	ResponseFunctionWebSearch,
 	ResponseInput,
 	ResponseInputContent,
 	ResponseInputImage,
@@ -185,7 +186,13 @@ export function convertResponsesMessages<TApi extends Api>(
 					output.push({
 						type: "message",
 						role: "assistant",
-						content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
+						content: [
+							{
+								type: "output_text",
+								text: sanitizeSurrogates(textBlock.text),
+								annotations: [],
+							},
+						],
 						status: "completed",
 						id: msgId,
 						phase: parsedSignature?.phase,
@@ -209,6 +216,20 @@ export function convertResponsesMessages<TApi extends Api>(
 						name: toolCall.name,
 						arguments: JSON.stringify(toolCall.arguments),
 					});
+				}
+			}
+			const isSameApi = assistantMsg.api === model.api;
+			if (isSameApi && assistantMsg._serverToolCalls?.length) {
+				const reasoningEnd = output.findIndex((item) => "type" in item && item.type !== "reasoning");
+				let insertIndex = reasoningEnd === -1 ? output.length : reasoningEnd;
+				for (const rawItem of assistantMsg._serverToolCalls) {
+					try {
+						const item = JSON.parse(rawItem) as ResponseFunctionWebSearch;
+						output.splice(insertIndex, 0, item);
+						insertIndex++;
+					} catch {
+						// Skip malformed server tool items.
+					}
 				}
 			}
 			if (output.length === 0) continue;
@@ -317,6 +338,14 @@ export async function processResponsesStream<TApi extends Api>(
 				};
 				output.content.push(currentBlock);
 				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+			} else if (item.type === "web_search_call") {
+				stream.push({
+					type: "server_toolcall_start",
+					serverToolCall: { kind: "web_search", callId: item.id },
+					partial: output,
+				});
+				currentItem = null;
+				currentBlock = null;
 			}
 		} else if (event.type === "response.reasoning_summary_part.added") {
 			if (currentItem && currentItem.type === "reasoning") {
@@ -427,12 +456,30 @@ export async function processResponsesStream<TApi extends Api>(
 			} else if (item.type === "message" && currentBlock?.type === "text") {
 				currentBlock.text = item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("");
 				currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+				const annotations = item.content.flatMap((c) =>
+					c.type === "output_text" && c.annotations.length > 0 ? c.annotations : [],
+				);
+				if (annotations.length > 0) {
+					currentBlock.annotations = annotations as unknown as TextContent["annotations"];
+				}
 				stream.push({
 					type: "text_end",
 					contentIndex: blockIndex(),
 					content: currentBlock.text,
 					partial: output,
 				});
+				currentBlock = null;
+			} else if (item.type === "web_search_call") {
+				if (!output._serverToolCalls) {
+					output._serverToolCalls = [];
+				}
+				output._serverToolCalls.push(JSON.stringify(item));
+				stream.push({
+					type: "server_toolcall_end",
+					serverToolCall: { kind: "web_search", callId: item.id },
+					partial: output,
+				});
+				currentItem = null;
 				currentBlock = null;
 			} else if (item.type === "function_call") {
 				const args =
